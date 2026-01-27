@@ -1,0 +1,9 @@
+Ben Bioren, Mutian Gao, Camie Sawa
+CSE 447
+Project Checkpoint 1
+2026 January 27
+
+Dataset: 
+We plan to use the mission transcripts of ISS in Real Time. The website has publicly available radio transmissions with captions, many of which are in other Tier 1 languages such as Russian, Spanish, Japanese, Hindi, and Swedish, in which case they have English translations added on. We are currently looking at ways to scrape the data from the UI in a way we can use.
+Method:
+	We’ll start with an N-gram model using python and standard frameworks like pytorch, numpy, matplotlib, plus unicodedata for the multilingual aspect and something else for the data-scraping element. This is mostly just out of ease and familiarity. There are some concerns about how good n-gram would be at maintaining meaning, so we’re also looking for some open-source transformer models to modify, but an N-gram model with characters. 

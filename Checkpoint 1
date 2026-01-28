@@ -4,6 +4,36 @@ Project Checkpoint 1
 2026 January 27
 
 Dataset: 
-We plan to use the mission transcripts of ISS in Real Time. The website has publicly available radio transmissions with captions, many of which are in other Tier 1 languages such as Russian, Spanish, Japanese, Hindi, and Swedish, in which case they have English translations added on. We are currently looking at ways to scrape the data from the UI in a way we can use.
+We plan to use the mission transcripts of ISS in Real Time. The website has publicly available radio transmissions with captions, 
+many of which are in other Tier 1 languages such as Russian, Spanish, Japanese, Hindi, and Swedish, in which case they have English 
+translations added on. We are currently looking at ways to scrape the data from the UI in a way we can use.
+The data is formatted like this:
+
+<div class="_commItem_yx5vv_27 null" data-time="01:51:2
+4" role="button" tabindex="0" aria-label="Jump to commu
+nication at 01:51:24">
+	<div class="_commTime_yx5vv_55">01:51:24</div>
+	<div class="_channelnum_yx5vv_45 _channelnum2_yx5vv_20
+	9">SG-2</div><div class="_textContainer_yx5vv_62">
+		<div>Huntsville Space-to-Ground 2 for swab and sample collection.</div>
+	</div>
+</div>
+<div class="_commItem_yx5vv_27 null" data-time="01:51:5
+2" role="button" tabindex="0" aria-label="Jump to commu
+nication at 01:51:52">
+	<div class="_commTime_yx5vv_55">01:51:52</div>
+	<div class="_channelnum_yx5vv_45 _channelnum2_yx5vv_20
+	9">SG-2</div>
+	<div class="_textContainer_yx5vv_62">
+		<div>Huntsville Station, 12-2 for your collection here.</div>
+	</div>
+</div>
+
+etc.
+If this ends up being too complicated then we'll look for a more general-use multilingual dataset in an easier-to-use format.
+
 Method:
-	We’ll start with an N-gram model using python and standard frameworks like pytorch, numpy, matplotlib, plus unicodedata for the multilingual aspect and something else for the data-scraping element. This is mostly just out of ease and familiarity. There are some concerns about how good n-gram would be at maintaining meaning, so we’re also looking for some open-source transformer models to modify, but an N-gram model with characters. 
+We’ll start with an N-gram model using python and standard frameworks like pytorch, numpy, matplotlib, plus unicodedata for the 
+multilingual aspect and something else for the data-scraping element. This is mostly just out of ease and familiarity. There are some 
+concerns about how good n-gram would be at maintaining meaning, so we’re also looking for some open-source transformer models to modify, 
+but an N-gram model with characters seems like a decent place to start. 

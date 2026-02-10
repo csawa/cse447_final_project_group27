@@ -30,10 +30,8 @@ nication at 01:51:52">
 </div>
 
 etc.
-If this ends up being too complicated then we'll look for a more general-use multilingual dataset in an easier-to-use format.
+If this ends up being too complicated then we'll look for a more general-use multilingual dataset in an easier-to-use format. For example, the OSCAR-2201 dataset has 166 languages and is cleaned from web-crawl data from Common Crawl.
 
 Method:
-We’ll start with an N-gram model using python and standard frameworks like pytorch, numpy, matplotlib, plus unicodedata for the 
-multilingual aspect and something else for the data-scraping element. This is mostly just out of ease and familiarity. There are some 
-concerns about how good n-gram would be at maintaining meaning, so we’re also looking for some open-source transformer models to modify, 
-but an N-gram model with characters seems like a decent place to start. 
+We will start with a character-level N-gram model (likely 3 or 5-gram) using python and standard frameworks like pytorch, numpy, and matplotlib. N-gram models have very fast inference, which will help with the processing time metric, and are fairly easy to implement so this seems like a decent place to start. One concern is that N-gram models will not capture context beyond the N characters, so in the future we might fine-tune an open-source Transformer model for primary predictions then use a N-gram model for fast fallback predictions. 
+

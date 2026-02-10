@@ -3,7 +3,7 @@ CSE 447
 Project Checkpoint 1
 2026 January 27
 
-Dataset: 
+Dataset: https://huggingface.co/datasets/Davlan/sib200
 We plan to use the mission transcripts of ISS in Real Time. The website has publicly available radio transmissions with captions, 
 many of which are in other Tier 1 languages such as Russian, Spanish, Japanese, Hindi, and Swedish, in which case they have English 
 translations added on. We are currently looking at ways to scrape the data from the UI in a way we can use.

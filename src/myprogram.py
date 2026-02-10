@@ -13,8 +13,9 @@ class MyModel:
     @classmethod
     def load_training_data(cls):
         # your code here
-        # this particular model doesn't train
-        return []
+        from datasets import load_dataset
+        data = load_dataset('Davlan/sib200')
+        return data["train"]
 
     @classmethod
     def load_test_data(cls, fname):

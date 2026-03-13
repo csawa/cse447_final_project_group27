@@ -1,214 +1,238 @@
+
 #!/usr/bin/env python
+from ast import List
 import os
+import pickle
 import string
 import random
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-
-import pickle
 import numpy as np
-from typing import List
-from datasets import load_dataset
-
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from datasets import load_dataset, get_dataset_config_names
+DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 class MyModel:
     """
     This is a starter model to get you started. Feel free to modify this file.
     """
-
-    def __init__(self, N: int = 3, k: int = 1e-7):
-        self.N = N
-        self.k = k
-        self.vocab = set()
-        self.ngram_counts = {}
-        self.context_counts = {}
-        self.sorted_vocab = []
-
-        self.UNK = "\ufffd" # actual Unicode 'unknown' char
-        self.PAD = "\x02"   # 'Start of Text' char
-        self.EOS = "\x03"   # 'End of Text' char
+      
+    def __init__(self, n_embd=256, n_heads=8):
+        self.n_embd = n_embd
+        self.n_heads = n_heads
+        self.vocab = { "\x02": 0, "\x03": 1, "\ufffd": 2 } # PAD, EOS, UNK
+        self.itos = {0: "\x02", 1: "\x03", 2: "\ufffd"}
+        self.model = None
     
-    def process_text_for_Ngram(self, data, N: int, is_test: bool = False) -> List[str]:
-        processed = []
-        for item in data:
-            # 1. Handle Hugging Face objects vs. raw strings
-            if isinstance(item, dict):
-                # If it's from load_training_data (HF Dataset)
-                text = item.get('text', '')
-            else:
-                # If it's from load_test_data (tab-separated file string)
-                parts = item.split('\t')
-                text = parts[2] if len(parts) > 2 else item
-            
-            
-            # start padding
-            padding = self.PAD * (N - 1)
-            if is_test:
-                processed.append(padding + text)
-            else:
-                # Add a single-character EOS marker
-                processed.append(padding + text + self.EOS)
-        return processed
-        
     @classmethod
     def load_training_data(cls):
         # your code here
-        from datasets import load_dataset
-        data = load_dataset('Davlan/sib200', 'eng_Latn') # FIX THIS BECAUSE WE DON'T KNOW THE LANGUAGE
-        return data["train"]
-
+        configs = get_dataset_config_names('Davlan/sib200')
+        all_data = []
+        # anchor_langs = ['eng_Latn', 'spa_Latn', 'zho_Hans']
+        # for lang in anchor_langs:
+        #     try:
+        #         data = load_dataset('Davlan/sib200', lang, split='train')
+        #         # Add more for these to help the model learn real patterns
+        #         all_data.extend(data['text']) 
+        #     except: continue
+        
+        # Sample other languages
+        for lang in configs:
+            try:
+                # use split='train' to get the data directly
+                data = load_dataset('Davlan/sib200', lang, split='train')
+                # append only the text strings
+                all_data.extend(data['text'][:500])
+            except Exception:
+                continue
+        return all_data
     @classmethod
     def load_test_data(cls, fname):
         # your code here
         data = []
-        with open(fname) as f:
+        with open(fname, 'rt', encoding='utf-8') as f:
             for line in f:
                 inp = line[:-1]  # the last character is a newline
                 data.append(inp)
         return data
-
     @classmethod
     def write_pred(cls, preds, fname):
-        with open(fname, 'wt') as f:
+        with open(fname, 'wt', encoding='utf-8') as f: # added utf-8 for multilingual
             for p in preds:
                 f.write('{}\n'.format(p))
-
+    def build_vocab(self, data):
+        """Extracts every unique character from the multilingual data."""
+        unique_chars = set()
+        for text in data:
+            if isinstance(text, str):
+                unique_chars.update(text)
+        
+        chars = sorted(list(unique_chars))
+        for char in chars:
+            if char not in self.vocab:
+                idx = len(self.vocab)
+                self.vocab[char] = idx
+                self.itos[idx] = char
+        
+    def encode(self, s):
+        return [self.vocab.get(c, self.vocab["\ufffd"]) for c in s]
+    def decode(self, l):
+        return "".join([self.itos.get(i, "\ufffd") for i in l])
+    
     def run_train(self, data, work_dir):
-        # your code here
-        processed = self.process_text_for_Ngram(data, self.N)
+        self.build_vocab(data)
+        v_size = len(self.vocab)
+        self.model = MiniTransformer(v_size, self.n_embd, self.n_heads).to(DEVICE)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-5)
         
-        # all characters seen in training
-        raw_vocab = set("".join(processed))
-        raw_vocab.add(self.UNK)
-        self.sorted_vocab = sorted(list(raw_vocab))
-        self.vocab = set(self.sorted_vocab)
+        max_seq_len = 128 
+        encoded_data = []
+        for text in data:
+            if len(text) < 2: continue
+            tokens = self.encode(text[:max_seq_len])
+            encoded_data.append(torch.tensor(tokens, dtype=torch.long))
+        batch_size = 64
 
-        # track the "empty" context (global frequencies)
-        self.context_counts = {}
-        self.ngram_counts = {}
-
-        self.unigram_counts = {}
-        self.total_unigrams = 0
-
-        for sent in processed:
-            # adding unigram counts
-            for char in sent:
-                self.unigram_counts[char] = self.unigram_counts.get(char, 0) + 1
-                self.total_unigrams += 1
+        for epoch in range(10):
+            random.shuffle(encoded_data)
+            total_loss = 0
+            num_batches = 0
             
+            for i in range(0, len(encoded_data), batch_size):
+                batch = encoded_data[i:i+batch_size]
+                x_padded = torch.nn.utils.rnn.pad_sequence(batch, batch_first=True, padding_value=0).to(DEVICE)
+                
+                if x_padded.shape[1] < 2: continue
+                
+                logits = self.model(x_padded[:, :-1])
+                targets = x_padded[:, 1:]
+                
+                loss = F.cross_entropy(logits.reshape(-1, v_size), targets.reshape(-1), ignore_index=0)
+                
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                total_loss += loss.item()
+                num_batches += 1
             
-            for i in range(len(sent) - self.N + 1):
-                context = sent[i : i + self.N - 1]
-                target = sent[i + self.N - 1]
-                
-                if context not in self.ngram_counts:
-                    self.ngram_counts[context] = {}
-                    self.context_counts[context] = 0
-                
-                self.ngram_counts[context][target] = self.ngram_counts[context].get(target, 0) + 1
-                self.context_counts[context] += 1
-        
-        # store the model
-        self.save(work_dir)
+            # safe division
+            avg_loss = total_loss / num_batches if num_batches > 0 else 0
+            print(f"Epoch {epoch+1} | Avg Loss: {avg_loss:.4f}")
+
 
     def run_pred(self, data):
-        # your code here
-        processed_inputs = self.process_text_for_Ngram(data, self.N, is_test=True)
-        preds = []
-        V_list = list(self.vocab)
-        V_size = len(self.vocab)
-
-        # for sent in processed_inputs:
-        #     # replace unseen chars with UNK marker
-        #     safe_sent = "".join([c if c in self.vocab else self.UNK for c in sent])
+        """The core requirement: returns the 3 most likely next characters."""
+        self.model.eval()
+        predictions = []
+        for text in data:
+            # empty lines/prompts
+            input_text = text if text else "\x02"
             
-        #     context = safe_sent[-(self.N - 1):] #if self.N > 1 else ""
-        #     # If we haven't seen this character sequence, shorten it until we have
-        #     while len(context) > 0 and context not in self.context_counts:
-        #         context = context[1:]
+            # encode and move to device
+            idx = torch.tensor([self.encode(input_text)], device=DEVICE)
             
-        #     counts = self.ngram_counts.get(context, {})
-        #     total = self.context_counts.get(context, 0)
-
-        #     # add k smoothing
-        #     probs = []
-        #     for char in V_list:
-        #         p = (counts.get(char, 0) + self.k) / (total + self.k * V_size)
-        #         probs.append(p)
-        
-            # interpolation weights
-        lambda3 = 0.6
-        lambda2 = 0.3
-        lambda1 = 0.1
-
-        for sent in processed_inputs:
-
-            safe_sent = "".join(
-                [c if c in self.vocab else self.UNK for c in sent]
-            )
-
-            context_full = safe_sent[-(self.N - 1):]
-
-            probs = []
-
-            for char in V_list:
-
-                # --- TRIGRAM ---
-                context3 = context_full
-                count3 = self.ngram_counts.get(context3, {}).get(char, 0)
-                total3 = self.context_counts.get(context3, 0)
-
-                P3 = (count3 + self.k) / (total3 + self.k * V_size) \
-                    if total3 > 0 else 0
-
-
-                # --- BIGRAM ---
-                context2 = context_full[-1:]  # last character only
-                count2 = self.ngram_counts.get(context2, {}).get(char, 0)
-                total2 = self.context_counts.get(context2, 0)
-
-                P2 = (count2 + self.k) / (total2 + self.k * V_size) \
-                    if total2 > 0 else 0
-
-
-                # --- UNIGRAM ---
-                count1 = self.unigram_counts.get(char, 0)
-                total1 = self.total_unigrams
-
-                P1 = (count1 + self.k) / (total1 + self.k * V_size)
-
-
-                # --- INTERPOLATION ---
-                P = lambda3 * P3 + lambda2 * P2 + lambda1 * P1
-
-                probs.append(P)
-
-            # get top 3
-            top_indices = np.argsort(probs)[::-1] #[-3:][::-1]
-            top_guesses = [] # [V_list[i] for i in top_indices]
-            for idx in top_indices:
-                char = V_list[idx]
-                if char not in [self.PAD, self.EOS, self.UNK]: # filter out eos and unk
-                    top_guesses.append(char)
-                if len(top_guesses) == 3:
-                    break
-            
-            preds.append(''.join(top_guesses))
-            
-        return preds
-
+            with torch.no_grad():
+                logits = self.model(idx)
+                # get predictions for the last character position
+                last_logits = logits[0, -1, :]
+                # find the top 3 most likely character indices
+                _, top_indices = torch.topk(last_logits, 3)
+                
+            # convert indices to chars and join into a single string (e.g., "yWA")
+            chars = [self.itos[i.item()] for i in top_indices]
+            predictions.append("".join(chars))
+        return predictions
     def save(self, work_dir):
-        # your code here
-        with open(os.path.join(work_dir, 'model.checkpoint'), 'wb') as f:
-            # f.write('dummy save')
-            pickle.dump(self, f)
-
+        data = {
+            'vocab': self.vocab, 
+            'itos': self.itos, 
+            'n_embd': self.n_embd, 
+            'n_heads': self.n_heads
+        }
+        # Using the 'with' statement ensures the file is closed and saved properly
+        meta_path = os.path.join(work_dir, 'data.pkl')
+        with open(meta_path, 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        model_path = os.path.join(work_dir, 'model.pt')
+        torch.save(self.model.state_dict(), model_path)
+        print(f"Model and meta saved successfully to {work_dir}")
+            
     @classmethod
     def load(cls, work_dir):
         # your code here
-        with open(os.path.join(work_dir, 'model.checkpoint'), 'rb') as f:
-            return pickle.load(f)
-        # return MyModel()
-
+        meta_path = os.path.join(work_dir, 'data.pkl')
+        model_weights_path = os.path.join(work_dir, 'model.pt')
+        # check whether file exists and has content
+        if not os.path.exists(meta_path) or os.path.getsize(meta_path) == 0:
+            raise FileNotFoundError(f"Missing or empty metadata at {meta_path}. Please run 'train' mode first.")
+        # load metadata dictionary
+        with open(meta_path, 'rb') as f:
+            data = pickle.load(f)
+        
+        # initialize with saved hyperparameters
+        instance = cls(n_embd=data['n_embd'], n_heads=data['n_heads'])
+        instance.vocab = data['vocab']
+        instance.itos = data['itos']
+        # reconstruct pytorch model architecture
+        v_size = len(instance.vocab)
+        instance.model = MiniTransformer(v_size, instance.n_embd, instance.n_heads).to(DEVICE)
+        
+        # load actual weights into pytorch model
+        if os.path.exists(model_weights_path):
+            instance.model.load_state_dict(torch.load(model_weights_path, map_location=DEVICE))
+            instance.model.eval() # Set to evaluation mode for testing
+        else:
+            print("Warning: model.pt weights file not found. Model will be untrained.")
+            
+        return instance
+class MiniTransformer(nn.Module):
+    def __init__(self, v_size, n_embd, n_heads):
+        super().__init__()
+        self.tok_emb = nn.Embedding(v_size, n_embd)
+        self.pos_emb = nn.Parameter(torch.zeros(1, 256, n_embd))
+        self.ln = nn.LayerNorm(n_embd)
+        self.head = nn.Linear(n_embd, v_size)
+        self.n_heads = n_heads
+        self.ffn = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.GELU(),
+            nn.Linear(4 * n_embd, n_embd),
+        )
+    def forward(self, idx):
+        B, T = idx.shape
+        x = self.tok_emb(idx) + self.pos_emb[:, :T, :]
+        
+        for _ in range(3):
+            x = x + self_attention(self.ln(x), self.ln(x), self.ln(x), n_heads=self.n_heads)
+            x = x + self.ffn(self.ln(x))
+        return self.head(self.ln(x))
+def self_attention(Q, K, V, n_heads=1, causal=True):
+    """
+    Optimized version for the MiniTransformer.
+    Works for 3D (B, T, D) or 4D (B, H, T, D) inputs.
+    """
+    # if 3D, add a dummy head dimension to make it 4D: (B, 1, T, D)
+    if Q.dim() == 3:
+        Q = Q.unsqueeze(1)
+        K = K.unsqueeze(1)
+        V = V.unsqueeze(1)
+    B, H, T, D = Q.shape
+    scaling = D**0.5
+    # compute attention Scores: (B, H, T, T)
+    attn_weights = torch.matmul(Q, K.transpose(-2, -1)) / scaling
+    if causal:
+        mask = torch.tril(torch.ones(T, T, device=Q.device))
+        attn_weights = attn_weights.masked_fill(mask == 0, float('-inf'))
+    # softmax and weighted sum
+    attn_probs = torch.softmax(attn_weights, dim=-1)
+    y = torch.matmul(attn_probs, V) # (B, H, T, D)
+    # reshape back to 3D: (B, T, H*D)
+    y = y.transpose(1, 2).contiguous().view(B, T, -1)
+    
+    return y
 
 if __name__ == '__main__':
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
@@ -217,9 +241,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_data', help='path to test data', default='example/input.txt')
     parser.add_argument('--test_output', help='path to write test predictions', default='pred.txt')
     args = parser.parse_args()
-
     random.seed(0)
-
     if args.mode == 'train':
         if not os.path.isdir(args.work_dir):
             print('Making working directory {}'.format(args.work_dir))
